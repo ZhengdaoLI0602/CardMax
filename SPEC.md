@@ -1,4 +1,4 @@
-# CardMax v0.1.1 Specification
+# CardMax v0.1.2 Specification
 
 ## Goal
 
@@ -32,7 +32,7 @@ All qualifying credit-card transactions from the enabled ledgers are pooled into
 - `HKD -> HK`
 - all other currencies -> `OVERSEAS`
 
-No address-based correction is performed in v0.1.1.
+No address-based correction is performed in v0.1.2.
 
 ## Account mapping
 
@@ -49,21 +49,13 @@ No address-based correction is performed in v0.1.1.
 - BOCHK Go + CN -> default Apple Pay / eligible UnionPay QR
 - BOCHK Go + HK -> default Apple Pay
 - HSBC Pulse + CN -> default Apple Pay
+- AEON Purple qualifying HK dining/transport -> default mobile payment for optimisation estimates
 
 These assumptions are intentional to keep CardMax simple and avoid additional manual tags.
 
 ## Merchant normalisation
 
 Raw iCost merchant descriptions are first mapped to canonical merchant IDs using `config/merchant_aliases.json`. Reward matching operates on canonical IDs while the original description is retained for audit display.
-
-Examples:
-
-- Meituan variants -> `MEITUAN`
-- JD variants -> `JD`
-- Pinduoduo variants -> `PINDUODUO`
-- McDonald's variants -> `MCDONALDS`
-- `Zgylgfyxgs Shanxi Chn` -> `HEMA`
-- `Asia Pacific 32000 Hongkong Hkg`, `文康`, `The Forest` -> `CANTEEN`
 
 ## Core reward behaviours
 
@@ -77,20 +69,40 @@ Examples:
 ### HSBC Pulse
 
 - CN Apple Pay default: 0.4% base + 2% = 2.4%.
-- Registered Mainland spending offer: monthly qualifying HSBC Mainland spending target HK$1,200.
-- Once the monthly target is met, qualifying Pulse Mainland dining receives an additional 3%, subject to its reward cap.
+- CardMax shows a dedicated Pulse monthly-spend and estimated-reward card.
+- Registered Mainland spending offer: monthly qualifying HSBC Mainland spending target HK$1,200, calculated across qualifying HSBC cards.
+- Once the monthly target is met, qualifying Pulse Mainland dining receives an additional 3%, subject to the HK$80 monthly bonus cap.
 
 ### AEON Purple UnionPay
 
-- HK selected local dining/transport categories: around 6% points-equivalent reward when eligible.
-- CN/Overseas registered promotion: around 6% gross, less approximately 1% foreign-currency fee -> around 5% net.
+#### Hong Kong
+
+- Eligible local dining paid by mobile payment: up to 6% total points-equivalent reward.
+- Eligible local transport paid by mobile payment: up to 6% total points-equivalent reward.
+- Dining and transport are tracked as separate reward pools.
+- Each category has an extra-reward cap equivalent to approximately HK$100 per month.
+- With 0.4% base reward and 5.6% extra reward, the remaining high-reward spend is derived from the unused extra-reward cap.
+- Other HK spending falls back to the base reward estimate.
+
+#### Mainland / Macau / Taiwan
+
+- Registered Aug-Oct 2026 UnionPay promotion: up to 6% total points-equivalent reward.
+- Monthly extra-reward cap: approximately HK$100.
+- User model deducts the approximately 1% foreign-currency fee, so the high-reward band is displayed as about 5% net.
+
+#### Other foreign currency / overseas
+
+- Registered Aug-Oct 2026 UnionPay promotion: up to 6% total points-equivalent reward.
+- Monthly extra-reward cap: approximately HK$200.
+- User model deducts the approximately 1% foreign-currency fee, so the high-reward band is displayed as about 5% net.
+- Exact HKD progress cannot yet be calculated for currencies other than CNY/HKD because v0.1.2 does not invent an FX rate.
 
 ### HSBC Red
 
 - Online spend: 4% on the first HK$10,000 per month, then 0.4% base.
 - Non-HKD transactions may incur approximately 1.95% foreign-currency fee; HKD-settled transactions do not.
 - HSBC Octopus top-up: 0.4%, not Red online 4%.
-- Japan designated merchants (e.g. SUICA / FamilyMart) are maintained as a separate higher-reward rule.
+- Japan designated merchants are maintained as a separate higher-reward rule.
 
 ### BOCHK Chill World
 
@@ -103,7 +115,7 @@ Examples:
 
 ### MMPOWER
 
-- Planned for v0.1 rule support but disabled until an actual iCost account mapping exists.
+- Planned for rule support but disabled until an actual iCost account mapping exists.
 
 ## Data privacy
 
@@ -115,6 +127,6 @@ Examples:
 
 Bank promotion parameters live in `config/rules.json` and should be reviewed monthly. Application code should not be rewritten merely because a bank changes a percentage, cap, promotion date or merchant list.
 
-## v0.1.1 known limitation
+## v0.1.2 known limitation
 
 CardMax does not invent FX rates. Exact HKD reward estimates are produced where an HKD-equivalent amount is safe under the configured rule. Overseas currencies can still be classified and recommended even when an exact HKD reward amount is unavailable.
