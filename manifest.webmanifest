@@ -1,0 +1,11 @@
+{
+  "name": "CardMax",
+  "short_name": "CardMax",
+  "description": "Personal iCost credit-card reward tracker",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f7fb",
+  "theme_color": "#111827",
+  "lang": "zh-Hans"
+}
