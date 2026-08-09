@@ -90,16 +90,38 @@ h2 { margin: 0; font-size: 20px; }
 .reward-card { border: 1px solid #e5e7eb; border-radius: 16px; padding: 16px; }
 .reward-card header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .reward-title { font-weight: 800; }
-.reward-rate { font-weight: 800; font-size: 19px; }
-.reward-meta { color: #6b7280; font-size: 13px; margin-top: 4px; }
+.reward-rate { font-weight: 800; font-size: 19px; text-align: right; white-space: nowrap; }
+.reward-meta { color: #6b7280; font-size: 13px; margin-top: 4px; line-height: 1.45; }
 .progress { height: 8px; background: #edf0f5; border-radius: 999px; overflow: hidden; margin: 12px 0 8px; }
 .progress > span { display: block; height: 100%; background: #111827; border-radius: inherit; }
-.reward-advice { margin-top: 8px; font-size: 14px; line-height: 1.5; }
+.reward-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.reward-stat {
+  background: #f7f8fb;
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.reward-stat span {
+  display: block;
+  color: #6b7280;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+.reward-stat strong {
+  display: block;
+  font-size: 15px;
+}
+.reward-remaining { margin-top: 10px; }
+.reward-advice { margin-top: 9px; font-size: 14px; line-height: 1.5; }
 .warning { color: #9a3412; }
 .good { color: #166534; }
 
 .table-wrap { overflow-x: auto; margin-top: 14px; }
-table { width: 100%; border-collapse: collapse; min-width: 820px; }
+table { width: 100%; border-collapse: collapse; min-width: 900px; }
 th, td { padding: 12px 10px; border-bottom: 1px solid #eef0f4; text-align: left; font-size: 13px; vertical-align: top; }
 th { color: #6b7280; font-weight: 700; }
 .muted { color: #6b7280; font-size: 13px; }
@@ -111,4 +133,7 @@ footer { color: #9ca3af; font-size: 12px; text-align: center; padding: 24px 8px 
   .topbar { align-items: flex-end; }
   .primary-button { white-space: nowrap; }
   .section-heading { align-items: flex-start; flex-direction: column; }
+  .reward-card header { gap: 8px; }
+  .reward-rate { font-size: 16px; }
+  .reward-stats { grid-template-columns: 1fr 1fr; }
 }
