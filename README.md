@@ -2,11 +2,11 @@
 
 CardMax is a personal PWA for analysing monthly iCost credit-card transactions and estimating remaining high-reward spend by card and region.
 
-## v0.1 scope
+## v0.1.1 scope
 
 - Input: iCost `.xlsx` export selected manually from Files (intended folder: `On My iPhone/CardMax`).
 - Analyse only rows where:
-  - `Ledger = manhu budget`
+  - `Ledger` is either `manhu budget` or `dogi budget`
   - `Type = Expense`
   - `Amount < 0`
   - `Account 1` is in the CardMax credit-card whitelist.
@@ -34,4 +34,4 @@ CardMax parses the selected workbook in the browser. Real iCost workbooks and tr
 
 ## Development status
 
-`v0.1` implementation has started directly on `main` as requested by the repository owner.
+`v0.1.1` adds multi-ledger support so credit-card transactions from both `manhu budget` and `dogi budget` are included in the same monthly reward calculation.
