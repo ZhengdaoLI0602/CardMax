@@ -1,4 +1,4 @@
-const CACHE = 'cardmax-v0.1.1';
+const CACHE = 'cardmax-v0.1.2';
 const APP_ASSETS = [
   './',
   './index.html',
