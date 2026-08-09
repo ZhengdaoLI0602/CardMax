@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#111827" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="CardMax" />
+  <title>CardMax</title>
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">CARDMAX</p>
+        <h1>本月回赠进度</h1>
+      </div>
+      <button id="syncButton" class="primary-button">同步 iCost</button>
+      <input id="fileInput" type="file" accept=".xlsx,.xls" hidden />
+    </header>
+
+    <section class="status-grid">
+      <article class="status-card">
+        <span>iCost 数据</span>
+        <strong id="dataUpdated">尚未导入</strong>
+      </article>
+      <article class="status-card">
+        <span>规则版本</span>
+        <strong id="rulesVersion">加载中…</strong>
+      </article>
+      <article class="status-card">
+        <span>信用卡交易</span>
+        <strong id="transactionCount">0 笔</strong>
+      </article>
+    </section>
+
+    <nav class="region-tabs" aria-label="消费地区">
+      <button class="region-tab active" data-region="CN">🇨🇳 内地</button>
+      <button class="region-tab" data-region="HK">🇭🇰 香港</button>
+      <button class="region-tab" data-region="OVERSEAS">🌏 海外</button>
+    </nav>
+
+    <section id="summaryPanel" class="panel empty-state">
+      <h2>先导入本月 iCost XLSX</h2>
+      <p>在 iCost 导出本月账单并保存到 <strong>On My iPhone/CardMax</strong>，然后点击“同步 iCost”选择该文件。</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">AUDIT</p>
+          <h2>本月信用卡流水</h2>
+        </div>
+        <span id="filterNote" class="muted">仅显示符合 CardMax 白名单的信用卡消费</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>卡</th>
+              <th>商户</th>
+              <th>地区</th>
+              <th>金额</th>
+              <th>规则</th>
+              <th>预计回赠</th>
+            </tr>
+          </thead>
+          <tbody id="transactionTableBody">
+            <tr><td colspan="7" class="muted">尚未导入数据</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <p>CardMax v0.1 · 所有 iCost 数据仅在当前设备浏览器中解析，不上传 GitHub。</p>
+    </footer>
+  </main>
+
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
