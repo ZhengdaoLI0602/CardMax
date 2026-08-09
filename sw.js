@@ -1,9 +1,9 @@
-const CACHE = 'cardmax-v0.1.2';
+const CACHE = 'cardmax-v0.1.3';
 const APP_ASSETS = [
   './',
   './index.html',
   './styles.css',
-  './src/app-v011.js',
+  './src/app-v013.js',
   './manifest.webmanifest',
   './config/cards.json',
   './config/merchant_aliases.json',
