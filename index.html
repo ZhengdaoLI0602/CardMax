@@ -61,14 +61,14 @@
         <table>
           <thead>
             <tr>
-              <th>日期</th>
-              <th>卡</th>
-              <th>账本</th>
-              <th>商户</th>
-              <th>地区</th>
-              <th>金额</th>
-              <th>规则</th>
-              <th>预计回赠</th>
+              <th class="sortable-header" data-sort-key="date" tabindex="0" role="button">日期 <span class="sort-indicator">▲</span></th>
+              <th class="sortable-header" data-sort-key="card" tabindex="0" role="button">卡 <span class="sort-indicator">↕</span></th>
+              <th class="sortable-header" data-sort-key="ledger" tabindex="0" role="button">账本 <span class="sort-indicator">↕</span></th>
+              <th class="sortable-header" data-sort-key="merchant" tabindex="0" role="button">商户 <span class="sort-indicator">↕</span></th>
+              <th class="sortable-header" data-sort-key="region" tabindex="0" role="button">地区 <span class="sort-indicator">↕</span></th>
+              <th class="sortable-header" data-sort-key="amount" tabindex="0" role="button">金额 <span class="sort-indicator">↕</span></th>
+              <th class="sortable-header" data-sort-key="rule" tabindex="0" role="button">规则 <span class="sort-indicator">↕</span></th>
+              <th class="sortable-header" data-sort-key="reward" tabindex="0" role="button">预计回赠 <span class="sort-indicator">↕</span></th>
             </tr>
           </thead>
           <tbody id="transactionTableBody">
@@ -79,10 +79,10 @@
     </section>
 
     <footer>
-      <p>CardMax v0.1.2 · 所有 iCost 数据仅在当前设备浏览器中解析，不上传 GitHub。</p>
+      <p>CardMax v0.1.3 · 所有 iCost 数据仅在当前设备浏览器中解析，不上传 GitHub。</p>
     </footer>
   </main>
 
-  <script type="module" src="./src/app-v011.js"></script>
+  <script type="module" src="./src/app-v013.js"></script>
 </body>
 </html>
