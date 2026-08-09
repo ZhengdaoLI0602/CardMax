@@ -124,6 +124,28 @@ h2 { margin: 0; font-size: 20px; }
 table { width: 100%; border-collapse: collapse; min-width: 900px; }
 th, td { padding: 12px 10px; border-bottom: 1px solid #eef0f4; text-align: left; font-size: 13px; vertical-align: top; }
 th { color: #6b7280; font-weight: 700; }
+.sortable-header {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: color .15s ease, background .15s ease;
+}
+.sortable-header:hover,
+.sortable-header:focus-visible {
+  color: #111827;
+  background: #f7f8fb;
+  outline: none;
+}
+.sortable-header.sort-active { color: #111827; }
+.sort-indicator {
+  display: inline-block;
+  min-width: 14px;
+  margin-left: 3px;
+  color: #9ca3af;
+  font-size: 10px;
+  vertical-align: 1px;
+}
+.sort-active .sort-indicator { color: #111827; }
 .muted { color: #6b7280; font-size: 13px; }
 
 footer { color: #9ca3af; font-size: 12px; text-align: center; padding: 24px 8px 0; }
