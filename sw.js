@@ -1,9 +1,9 @@
-const CACHE = 'cardmax-v0.1.0';
+const CACHE = 'cardmax-v0.1.1';
 const APP_ASSETS = [
   './',
   './index.html',
   './styles.css',
-  './src/app.js',
+  './src/app-v011.js',
   './manifest.webmanifest',
   './config/cards.json',
   './config/merchant_aliases.json',
@@ -25,7 +25,6 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
 
-  // Reward config should prefer the newest GitHub Pages version when online.
   if (url.pathname.includes('/config/')) {
     event.respondWith(
       fetch(event.request)
@@ -40,12 +39,14 @@ self.addEventListener('fetch', event => {
   }
 
   event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-      if (event.request.method === 'GET' && response.ok && url.origin === self.location.origin) {
-        const copy = response.clone();
-        caches.open(CACHE).then(cache => cache.put(event.request, copy));
-      }
-      return response;
-    }))
+    fetch(event.request)
+      .then(response => {
+        if (event.request.method === 'GET' && response.ok && url.origin === self.location.origin) {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        }
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
