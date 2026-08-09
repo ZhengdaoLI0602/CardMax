@@ -1,0 +1,696 @@
+const $ = (selector) => document.querySelector(selector);
+
+const state = {
+  cards: {},
+  aliases: {},
+  rules: null,
+  transactions: [],
+  evaluated: [],
+  lastResult: null,
+  region: 'CN',
+  monthKey: null,
+  sourceFile: null,
+  sourceDateMin: null,
+  sourceDateMax: null,
+  tableSort: { key: 'date', direction: 'asc' }
+};
+
+const ONLINE_MERCHANTS = new Set(['AGODA', 'CHINA_EASTERN', 'EXPEDIA', 'JD', 'PINDUODUO']);
+const DINING_WORDS = ['restaurant', 'dining', 'food', '餐饮', '正餐', '美食', '快餐', '烧烤', '火锅'];
+const TRANSPORT_WORDS = ['transport', 'traffic', 'taxi', 'uber', 'mtr', 'metro', 'rail', 'bus', 'tram', 'ferry', '交通', '出行', '港铁', '地铁', '巴士', '公交', '的士', '出租车', '高铁', '隧道', '电车', '渡轮'];
+const KNOWN_NON_HK_MERCHANTS = new Set([
+  'AGODA', 'CHINA_EASTERN', 'EXPEDIA', 'MEITUAN', 'JD', 'PINDUODUO', 'HEMA', 'SAMS_CLUB', 'WALMART'
+]);
+const HK_LOCATION_WORDS = ['hong kong', 'hkg', 'kowloon', 'new territories', '香港', '九龍', '九龙', '新界'];
+const NON_HK_LOCATION_WORDS = ['china', 'chn', 'beijing', 'shanghai', 'shenzhen', 'japan', 'tokyo', 'osaka', 'australia', 'perth', 'singapore', 'taiwan', 'macau'];
+const textCollator = new Intl.Collator(['zh-Hans', 'en'], { numeric: true, sensitivity: 'base' });
+
+async function loadConfig() {
+  const [cards, aliases, rules] = await Promise.all([
+    fetch('./config/cards.json', { cache: 'no-store' }).then(r => r.json()),
+    fetch('./config/merchant_aliases.json', { cache: 'no-store' }).then(r => r.json()),
+    fetch('./config/rules.json', { cache: 'no-store' }).then(r => r.json())
+  ]);
+  state.cards = cards;
+  state.aliases = aliases;
+  state.rules = rules;
+  $('#rulesVersion').textContent = rules.version;
+}
+
+function normalizeText(value) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ');
+}
+
+function configuredLedgers() {
+  const profile = state.rules?.profile || {};
+  const raw = Array.isArray(profile.ledgers) && profile.ledgers.length
+    ? profile.ledgers
+    : [profile.ledger].filter(Boolean);
+  return raw.map(normalizeText);
+}
+
+function normalizeMerchant(original) {
+  const raw = normalizeText(original);
+  if (!raw) return 'UNKNOWN';
+  const lower = raw.toLowerCase();
+  for (const [canonical, variants] of Object.entries(state.aliases)) {
+    for (const variant of variants) {
+      const needle = normalizeText(variant).toLowerCase();
+      if (needle && (lower === needle || lower.includes(needle))) return canonical;
+    }
+  }
+  return raw;
+}
+
+function classifyRegion(currency) {
+  const code = normalizeText(currency).toUpperCase();
+  if (code === 'CNY') return 'CN';
+  if (code === 'HKD') return 'HK';
+  return 'OVERSEAS';
+}
+
+function parseDate(value) {
+  if (value instanceof Date && !Number.isNaN(value.valueOf())) return value;
+  if (typeof value === 'number' && window.XLSX?.SSF) {
+    const p = XLSX.SSF.parse_date_code(value);
+    if (p) return new Date(p.y, p.m - 1, p.d, p.H || 0, p.M || 0, Math.floor(p.S || 0));
+  }
+  const text = normalizeText(value).replace(/\./g, '/');
+  const d = new Date(text);
+  return Number.isNaN(d.valueOf()) ? null : d;
+}
+
+function monthKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function formatDate(date) {
+  return new Intl.DateTimeFormat('zh-HK', { month: '2-digit', day: '2-digit' }).format(date);
+}
+
+function formatFullDate(date) {
+  return new Intl.DateTimeFormat('zh-HK', { year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
+function pick(row, names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(row, name)) return row[name];
+    const key = Object.keys(row).find(k => normalizeText(k).toLowerCase() === name.toLowerCase());
+    if (key) return row[key];
+  }
+  return undefined;
+}
+
+function isDining(tx) {
+  const text = `${tx.firstCategory} ${tx.secondCategory} ${tx.originalMerchant}`.toLowerCase();
+  return DINING_WORDS.some(word => text.includes(word));
+}
+
+function isLocalTransport(tx) {
+  if (tx.merchant === 'MTR') return true;
+  const text = `${tx.firstCategory} ${tx.secondCategory} ${tx.originalMerchant} ${tx.merchant}`.toLowerCase();
+  return TRANSPORT_WORDS.some(word => text.includes(word));
+}
+
+function isOnline(tx) {
+  if (ONLINE_MERCHANTS.has(tx.merchant)) return true;
+  const text = `${tx.firstCategory} ${tx.secondCategory} ${tx.originalMerchant}`.toLowerCase();
+  return ['online', '网购', '网上', '互联网'].some(word => text.includes(word));
+}
+
+function isNonHongKongMerchant(tx) {
+  if (KNOWN_NON_HK_MERCHANTS.has(tx.merchant)) return true;
+  const locationText = normalizeText(tx.address).toLowerCase();
+  if (!locationText) return false;
+  if (HK_LOCATION_WORDS.some(word => locationText.includes(word))) return false;
+  return NON_HK_LOCATION_WORDS.some(word => locationText.includes(word));
+}
+
+function hkdEquivalent(tx) {
+  if (tx.currency === 'HKD' || tx.currency === 'CNY') return tx.amount;
+  return null;
+}
+
+function redFeeRate(tx, rule) {
+  if (tx.currency !== 'HKD') return rule.foreignFeeRate || 0;
+  if (isNonHongKongMerchant(tx)) return rule.hkdNonHongKongMerchantFeeRate || 0;
+  return 0;
+}
+
+function parseRows(rows) {
+  const ledgersWanted = new Set(configuredLedgers().map(x => x.toLowerCase()));
+  const parsedAll = rows.map((row, index) => {
+    const date = parseDate(pick(row, ['Date', '日期']));
+    const amountRaw = Number(pick(row, ['Amount', '金额']));
+    const account = normalizeText(pick(row, ['Account 1', '账户1', 'Account']));
+    const type = normalizeText(pick(row, ['Type', '类型']));
+    const ledger = normalizeText(pick(row, ['Ledger', '账本']));
+    const currency = normalizeText(pick(row, ['Currency', '币种'])).toUpperCase();
+    const originalMerchant = normalizeText(pick(row, ['Remark', '备注', 'Merchant', '商户']));
+    return {
+      sourceIndex: index + 2,
+      date,
+      amount: Math.abs(amountRaw),
+      signedAmount: amountRaw,
+      account,
+      card: state.cards[account],
+      type,
+      ledger,
+      currency,
+      region: classifyRegion(currency),
+      originalMerchant,
+      merchant: normalizeMerchant(originalMerchant),
+      address: normalizeText(pick(row, ['Address', '地址'])),
+      firstCategory: normalizeText(pick(row, ['First-Level Category', '一级分类'])),
+      secondCategory: normalizeText(pick(row, ['Second-Level Category', '二级分类']))
+    };
+  });
+
+  const dated = parsedAll.filter(tx => tx.date);
+  if (dated.length) {
+    state.sourceDateMin = dated.reduce((a, b) => a.date < b.date ? a : b).date;
+    state.sourceDateMax = dated.reduce((a, b) => a.date > b.date ? a : b).date;
+  }
+
+  const parsed = parsedAll.filter(tx =>
+    tx.date &&
+    tx.card?.enabled &&
+    tx.type.toLowerCase() === 'expense' &&
+    tx.signedAmount < 0 &&
+    ledgersWanted.has(tx.ledger.toLowerCase())
+  );
+
+  if (!parsed.length) return [];
+  const latest = parsed.reduce((a, b) => a.date > b.date ? a : b).date;
+  state.monthKey = monthKey(latest);
+  return parsed
+    .filter(tx => monthKey(tx.date) === state.monthKey)
+    .sort((a, b) => a.date - b.date || a.sourceIndex - b.sourceIndex);
+}
+
+function applyExtraRewardCap(amount, rule, extraUsed, feeRate = 0) {
+  const remainingExtra = Math.max(0, (rule.monthlyExtraRewardCapHKD || 0) - extraUsed);
+  const extraReward = Math.min(amount * rule.extraRate, remainingExtra);
+  const grossReward = amount * rule.baseRate + extraReward;
+  const fee = amount * feeRate;
+  const netReward = grossReward - fee;
+  return {
+    extraReward,
+    grossReward,
+    fee,
+    netReward,
+    grossRate: amount ? grossReward / amount : 0,
+    netRate: amount ? netReward / amount : 0
+  };
+}
+
+function evaluate(transactions) {
+  const r = state.rules.cards;
+  const pools = {
+    goDesignatedReward: 0,
+    goMobileBonusReward: 0,
+    redOnlineSpend: 0,
+    redOnlineExtraReward: 0,
+    redOnlineGrossReward: 0,
+    redOnlineFees: 0,
+    redOnlineNetBenefit: 0,
+    chillExtraReward: 0,
+    pulseCNSpend: 0,
+    pulseCNReward: 0,
+    pulseDiningBonusReward: 0,
+    aeonHKDiningSpend: 0,
+    aeonHKDiningExtraReward: 0,
+    aeonHKDiningReward: 0,
+    aeonHKTransportSpend: 0,
+    aeonHKTransportExtraReward: 0,
+    aeonHKTransportReward: 0,
+    aeonCNSpend: 0,
+    aeonCNExtraReward: 0,
+    aeonCNNetReward: 0,
+    aeonOverseasSpend: 0,
+    aeonOverseasExtraReward: 0,
+    aeonOverseasNetReward: 0,
+    aeonOverseasUnpricedCount: 0
+  };
+
+  const hsbcCNSpend = transactions
+    .filter(tx => ['hsbc_red', 'hsbc_pulse'].includes(tx.card.id) && tx.region === 'CN')
+    .reduce((sum, tx) => sum + (hkdEquivalent(tx) ?? 0), 0);
+  const pulseThresholdMet = hsbcCNSpend >= r.hsbc_pulse.CN.mainlandMonthlyThreshold.amountHKD;
+
+  const evaluated = transactions.map(tx => {
+    const amountHKD = hkdEquivalent(tx);
+    let label = '未配置高回赠规则';
+    let grossRate = null;
+    let netRate = null;
+    let rewardHKD = null;
+    let feeHKD = 0;
+
+    if (tx.card.id === 'bochk_go') {
+      if (tx.region === 'CN' && r.bochk_go.CN.designatedMerchants.merchants.includes(tx.merchant)) {
+        const rule = r.bochk_go.CN.designatedMerchants;
+        grossRate = netRate = rule.grossRate;
+        label = rule.label;
+        if (amountHKD != null) {
+          const remaining = Math.max(0, rule.monthlyRewardCapHKD - pools.goDesignatedReward);
+          rewardHKD = Math.min(amountHKD * grossRate, remaining);
+          pools.goDesignatedReward += rewardHKD;
+        }
+      } else if (['CN', 'HK'].includes(tx.region)) {
+        const rule = tx.region === 'CN' ? r.bochk_go.CN.mobile : r.bochk_go.HK.mobile;
+        grossRate = netRate = rule.grossRate;
+        label = rule.label;
+        if (amountHKD != null) {
+          const bonusRate = grossRate - rule.baseRate;
+          const remainingBonus = Math.max(0, r.bochk_go.CN.mobile.bonusEquivalentCapHKD - pools.goMobileBonusReward);
+          const bonus = Math.min(amountHKD * bonusRate, remainingBonus);
+          rewardHKD = amountHKD * rule.baseRate + bonus;
+          pools.goMobileBonusReward += bonus;
+        }
+      }
+    }
+
+    if (tx.card.id === 'hsbc_red') {
+      if (tx.merchant === 'OCTOPUS') {
+        const rule = r.hsbc_red.octopus;
+        grossRate = netRate = rule.grossRate;
+        label = rule.label;
+        if (amountHKD != null) rewardHKD = amountHKD * grossRate;
+      } else if (isOnline(tx)) {
+        const rule = r.hsbc_red.online;
+        label = rule.label;
+        if (amountHKD != null) {
+          const highRemaining = Math.max(0, rule.monthlySpendCapHKD - pools.redOnlineSpend);
+          const highPart = Math.min(amountHKD, highRemaining);
+          const extraReward = highPart * rule.extraRate;
+          const grossReward = amountHKD * rule.baseRate + extraReward;
+          const feeRate = redFeeRate(tx, rule);
+          feeHKD = amountHKD * feeRate;
+          rewardHKD = grossReward;
+          grossRate = grossReward / amountHKD;
+          netRate = (grossReward - feeHKD) / amountHKD;
+          pools.redOnlineSpend += amountHKD;
+          pools.redOnlineExtraReward += extraReward;
+          pools.redOnlineGrossReward += grossReward;
+          pools.redOnlineFees += feeHKD;
+          pools.redOnlineNetBenefit += grossReward - feeHKD;
+          if (feeRate > 0) label += ` · 估算手续费 ${pct(feeRate)}`;
+        } else {
+          grossRate = rule.grossRate;
+          netRate = grossRate - rule.foreignFeeRate;
+        }
+      } else {
+        const rule = r.hsbc_red.online;
+        grossRate = 0.004;
+        const feeRate = redFeeRate(tx, rule);
+        netRate = grossRate - feeRate;
+        label = feeRate > 0 ? `HSBC 基础回赠 0.4% · 估算手续费 ${pct(feeRate)}` : 'HSBC 基础回赠 0.4%';
+        if (amountHKD != null) {
+          feeHKD = amountHKD * feeRate;
+          rewardHKD = amountHKD * grossRate;
+        }
+      }
+    }
+
+    if (tx.card.id === 'hsbc_pulse' && tx.region === 'CN') {
+      const rule = r.hsbc_pulse.CN.applePay;
+      grossRate = netRate = rule.grossRate;
+      label = rule.label;
+      if (amountHKD != null) pools.pulseCNSpend += amountHKD;
+      let diningBonus = 0;
+      if (isDining(tx) && pulseThresholdMet && amountHKD != null) {
+        const bonusRule = r.hsbc_pulse.CN.diningBonus;
+        const remaining = Math.max(0, bonusRule.monthlyRewardCapHKD - pools.pulseDiningBonusReward);
+        diningBonus = Math.min(amountHKD * bonusRule.extraRate, remaining);
+        pools.pulseDiningBonusReward += diningBonus;
+        grossRate += bonusRule.extraRate;
+        netRate = grossRate;
+        label += ' + 餐饮额外 3%';
+      }
+      if (amountHKD != null) {
+        rewardHKD = amountHKD * rule.grossRate + diningBonus;
+        pools.pulseCNReward += rewardHKD;
+      }
+    }
+
+    if (tx.card.id === 'aeon_purple') {
+      const aeon = r.aeon_purple;
+      if (tx.region === 'HK' && isDining(tx)) {
+        const rule = aeon.HK.diningMobile;
+        label = rule.label;
+        grossRate = netRate = rule.grossRate;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonHKDiningExtraReward, 0);
+          pools.aeonHKDiningSpend += amountHKD;
+          pools.aeonHKDiningExtraReward += calc.extraReward;
+          pools.aeonHKDiningReward += calc.grossReward;
+          rewardHKD = calc.grossReward;
+          grossRate = netRate = calc.grossRate;
+        }
+      } else if (tx.region === 'HK' && isLocalTransport(tx)) {
+        const rule = aeon.HK.transportMobile;
+        label = rule.label;
+        grossRate = netRate = rule.grossRate;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonHKTransportExtraReward, 0);
+          pools.aeonHKTransportSpend += amountHKD;
+          pools.aeonHKTransportExtraReward += calc.extraReward;
+          pools.aeonHKTransportReward += calc.grossReward;
+          rewardHKD = calc.grossReward;
+          grossRate = netRate = calc.grossRate;
+        }
+      } else if (tx.region === 'HK') {
+        const rule = aeon.HK.other;
+        label = rule.label;
+        grossRate = netRate = rule.grossRate;
+        if (amountHKD != null) rewardHKD = amountHKD * rule.grossRate;
+      } else if (tx.region === 'CN') {
+        const rule = aeon.CN.general;
+        label = rule.label;
+        grossRate = rule.grossRate;
+        netRate = rule.netRate;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonCNExtraReward, rule.foreignFeeRate);
+          pools.aeonCNSpend += amountHKD;
+          pools.aeonCNExtraReward += calc.extraReward;
+          pools.aeonCNNetReward += calc.netReward;
+          rewardHKD = calc.netReward;
+          grossRate = calc.grossRate;
+          netRate = calc.netRate;
+        }
+      } else if (tx.region === 'OVERSEAS') {
+        const rule = aeon.OVERSEAS.general;
+        label = rule.label;
+        grossRate = rule.grossRate;
+        netRate = rule.netRate;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonOverseasExtraReward, rule.foreignFeeRate);
+          pools.aeonOverseasSpend += amountHKD;
+          pools.aeonOverseasExtraReward += calc.extraReward;
+          pools.aeonOverseasNetReward += calc.netReward;
+          rewardHKD = calc.netReward;
+          grossRate = calc.grossRate;
+          netRate = calc.netRate;
+        } else {
+          pools.aeonOverseasUnpricedCount += 1;
+        }
+      }
+    }
+
+    if (tx.card.id === 'bochk_chill') {
+      const rule = isOnline(tx) ? r.bochk_chill.online : (tx.region === 'OVERSEAS' ? r.bochk_chill.overseas : null);
+      if (rule) {
+        label = rule.label;
+        grossRate = rule.grossRate;
+        netRate = grossRate - (tx.currency === 'HKD' ? 0 : rule.foreignFeeRate);
+        if (amountHKD != null) {
+          const remainingExtra = Math.max(0, rule.monthlyExtraRewardCapHKD - pools.chillExtraReward);
+          const extra = Math.min(amountHKD * rule.extraRate, remainingExtra);
+          pools.chillExtraReward += extra;
+          rewardHKD = amountHKD * rule.baseRate + extra - (tx.currency === 'HKD' ? 0 : amountHKD * rule.foreignFeeRate);
+          netRate = rewardHKD / amountHKD;
+        }
+      }
+    }
+
+    if (tx.card.id === 'mox_credit' && tx.region === 'OVERSEAS') {
+      const rule = r.mox_credit.OVERSEAS;
+      label = rule.label;
+      netRate = null;
+    }
+
+    return {
+      ...tx,
+      amountHKD,
+      label,
+      grossRate,
+      netRate,
+      rewardHKD,
+      feeHKD,
+      online: isOnline(tx),
+      dining: isDining(tx),
+      localTransport: isLocalTransport(tx)
+    };
+  });
+
+  return { evaluated, pools, hsbcCNSpend, pulseThresholdMet };
+}
+
+function money(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  const sign = value < 0 ? '-' : '';
+  const absolute = Math.abs(value);
+  return `${sign}HK$${absolute.toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function pct(value) {
+  if (value == null) return '—';
+  return `${(value * 100).toFixed(Math.abs(value * 100) < 10 ? 2 : 1).replace(/\.00$/, '')}%`;
+}
+
+function progressCard({ title, rate, progressUsed = null, progressCap = null, progressLabel = '', remainingSpend = null, remainingLabel = '高回赠还可刷约', stats = [], advice = '', warning = false }) {
+  const hasProgress = progressUsed != null && progressCap != null && progressCap > 0;
+  const ratio = hasProgress ? Math.min(1, Math.max(0, progressUsed / progressCap)) : 0;
+  const statHtml = stats.length
+    ? `<div class="reward-stats">${stats.map(stat => `<div class="reward-stat"><span>${stat.label}</span><strong>${stat.value}</strong></div>`).join('')}</div>`
+    : '';
+  return `<article class="reward-card">
+    <header>
+      <div><div class="reward-title">${title}</div>${progressLabel ? `<div class="reward-meta">${progressLabel}</div>` : ''}</div>
+      <div class="reward-rate">${rate}</div>
+    </header>
+    ${hasProgress ? `<div class="progress"><span style="width:${ratio * 100}%"></span></div>` : ''}
+    ${statHtml}
+    ${remainingSpend != null ? `<div class="reward-meta reward-remaining">${remainingLabel} <strong>${money(Math.max(0, remainingSpend))}</strong></div>` : ''}
+    ${advice ? `<div class="reward-advice ${warning ? 'warning' : ''}">${advice}</div>` : ''}
+  </article>`;
+}
+
+function remainingFromExtraCap(rule, usedExtra) {
+  if (!rule?.extraRate) return null;
+  return Math.max(0, (rule.monthlyExtraRewardCapHKD - usedExtra) / rule.extraRate);
+}
+
+function redProgressCard(p, title = 'HSBC Red · 网购') {
+  const red = state.rules.cards.hsbc_red.online;
+  return progressCard({
+    title,
+    rate: '4% / 超额 0.4%',
+    progressUsed: p.redOnlineExtraReward,
+    progressCap: red.monthlyExtraRewardCapHKD,
+    progressLabel: `额外 RewardCash ${money(p.redOnlineExtraReward)} / ${money(red.monthlyExtraRewardCapHKD)}`,
+    stats: [
+      { label: '本月网购', value: money(p.redOnlineSpend) },
+      { label: '预计 RewardCash', value: money(p.redOnlineGrossReward) },
+      { label: '估算手续费', value: money(p.redOnlineFees) },
+      { label: '预计净收益', value: money(p.redOnlineNetBenefit) }
+    ],
+    remainingSpend: remainingFromExtraCap(red, p.redOnlineExtraReward),
+    advice: '4% = 0.4% 基础 + 3.6% 额外。非 HKD Visa/Mastercard 交易按约 1.95% 手续费估算；以 HKD 向香港以外或非香港登记商户付款，在可确认商户所在地时按 1% 征费估算。'
+  });
+}
+
+function renderSummary(result) {
+  const panel = $('#summaryPanel');
+  const r = state.rules.cards;
+  const p = result.pools;
+  const cards = [];
+
+  if (state.region === 'CN') {
+    const goDesignated = r.bochk_go.CN.designatedMerchants;
+    cards.push(progressCard({ title: 'BOCHK Go · 指定商户', rate: '5%', progressUsed: p.goDesignatedReward, progressCap: goDesignated.monthlyRewardCapHKD, progressLabel: `已赚 ${money(p.goDesignatedReward)} / ${money(goDesignated.monthlyRewardCapHKD)}`, remainingSpend: (goDesignated.monthlyRewardCapHKD - p.goDesignatedReward) / goDesignated.grossRate, advice: 'MEITUAN 等确认的指定商户优先匹配此奖励池。' }));
+
+    const goMobile = r.bochk_go.CN.mobile;
+    cards.push(progressCard({ title: 'BOCHK Go · AP / 云闪付', rate: '≈8%', progressUsed: p.goMobileBonusReward, progressCap: goMobile.bonusEquivalentCapHKD, progressLabel: `额外积分等值 ${money(p.goMobileBonusReward)} / ${money(goMobile.bonusEquivalentCapHKD)}`, remainingSpend: (goMobile.bonusEquivalentCapHKD - p.goMobileBonusReward) / (goMobile.grossRate - goMobile.baseRate), advice: 'CN 与 HK 手机支付共用额外积分池。' }));
+
+    const target = r.hsbc_pulse.CN.mainlandMonthlyThreshold.amountHKD;
+    const remaining = Math.max(0, target - result.hsbcCNSpend);
+    cards.push(progressCard({ title: 'HSBC · 内地月消费门槛', rate: result.pulseThresholdMet ? '已达标' : 'HK$1,200', progressUsed: result.hsbcCNSpend, progressCap: target, progressLabel: `合资格 HSBC 内地消费 ${money(result.hsbcCNSpend)} / ${money(target)}`, advice: result.pulseThresholdMet ? '已达到本月门槛；合资格 Pulse 内地餐饮可享额外 3%。' : `本月还需约 ${money(remaining)} 合资格 HSBC 内地消费。`, warning: !result.pulseThresholdMet }));
+
+    cards.push(progressCard({ title: 'HSBC Pulse · 内地 Apple Pay', rate: '2.4% / 最高 5.4%', progressUsed: p.pulseCNSpend, progressCap: target, progressLabel: `Pulse 本月消费 ${money(p.pulseCNSpend)} · 以 HK$1,200 门槛作参考`, stats: [{ label: 'Pulse 本月消费', value: money(p.pulseCNSpend) }, { label: '预计回赠', value: money(p.pulseCNReward) }], advice: '普通内地 Apple Pay 按 2.4% 估算；真正 HK$1,200 门槛按你所有合资格 HSBC 内地签账合并计算。' }));
+
+    const dining = r.hsbc_pulse.CN.diningBonus;
+    cards.push(progressCard({ title: 'HSBC Pulse · 内地餐饮 Bonus', rate: '+3% · 最高 5.4%', progressUsed: p.pulseDiningBonusReward, progressCap: dining.monthlyRewardCapHKD, progressLabel: `额外餐饮回赠 ${money(p.pulseDiningBonusReward)} / ${money(dining.monthlyRewardCapHKD)}`, remainingSpend: (dining.monthlyRewardCapHKD - p.pulseDiningBonusReward) / dining.extraRate, remainingLabel: '额外 3% 还可覆盖约', advice: result.pulseThresholdMet ? '本月门槛已达标；后续合资格内地餐饮可继续吃 3% Bonus。' : '需先达到本月 HK$1,200 合资格 HSBC 内地消费门槛。', warning: !result.pulseThresholdMet }));
+
+    const aeonCN = r.aeon_purple.CN.general;
+    cards.push(progressCard({ title: 'AEON Purple · 内地 / 澳门 / 台湾', rate: '6% gross · ≈5% net', progressUsed: p.aeonCNExtraReward, progressCap: aeonCN.monthlyExtraRewardCapHKD, progressLabel: `额外奖励 ${money(p.aeonCNExtraReward)} / ${money(aeonCN.monthlyExtraRewardCapHKD)}`, stats: [{ label: '本月消费', value: money(p.aeonCNSpend) }, { label: '预计净回赠', value: money(p.aeonCNNetReward) }], remainingSpend: remainingFromExtraCap(aeonCN, p.aeonCNExtraReward), advice: '已登记 2026/08–10 活动；按 6% 积分等值、1% 外币手续费估算。额外奖励池吃满后应优先切换其他卡。' }));
+  }
+
+  if (state.region === 'HK') {
+    const go = r.bochk_go.HK.mobile;
+    const sharedCap = r.bochk_go.CN.mobile.bonusEquivalentCapHKD;
+    cards.push(progressCard({ title: 'BOCHK Go · 香港 AP', rate: '≈4%', progressUsed: p.goMobileBonusReward, progressCap: sharedCap, progressLabel: `额外积分等值 ${money(p.goMobileBonusReward)} / ${money(sharedCap)}`, remainingSpend: (sharedCap - p.goMobileBonusReward) / (go.grossRate - go.baseRate), advice: '与内地 Go 手机支付共用额外积分池。' }));
+
+    const aeonDining = r.aeon_purple.HK.diningMobile;
+    cards.push(progressCard({ title: 'AEON Purple · 本地餐饮', rate: '最高 6%', progressUsed: p.aeonHKDiningExtraReward, progressCap: aeonDining.monthlyExtraRewardCapHKD, progressLabel: `额外奖励 ${money(p.aeonHKDiningExtraReward)} / ${money(aeonDining.monthlyExtraRewardCapHKD)}`, stats: [{ label: '本月合资格餐饮', value: money(p.aeonHKDiningSpend) }, { label: '预计积分等值回赠', value: money(p.aeonHKDiningReward) }], remainingSpend: remainingFromExtraCap(aeonDining, p.aeonHKDiningExtraReward), advice: '按手机支付最高 6% 估算；本地餐饮类别每月额外奖励上限约 HK$100。' }));
+
+    const aeonTransport = r.aeon_purple.HK.transportMobile;
+    cards.push(progressCard({ title: 'AEON Purple · 本地交通', rate: '最高 6%', progressUsed: p.aeonHKTransportExtraReward, progressCap: aeonTransport.monthlyExtraRewardCapHKD, progressLabel: `额外奖励 ${money(p.aeonHKTransportExtraReward)} / ${money(aeonTransport.monthlyExtraRewardCapHKD)}`, stats: [{ label: '本月合资格交通', value: money(p.aeonHKTransportSpend) }, { label: '预计积分等值回赠', value: money(p.aeonHKTransportReward) }], remainingSpend: remainingFromExtraCap(aeonTransport, p.aeonHKTransportExtraReward), advice: 'MTR、巴士、Uber Taxi、隧道费、高铁等合资格本地交通按手机支付最高 6% 估算。' }));
+
+    cards.push(redProgressCard(p));
+
+    const chill = r.bochk_chill.online;
+    cards.push(progressCard({ title: 'Chill World · 网购', rate: '5%', progressUsed: p.chillExtraReward, progressCap: chill.monthlyExtraRewardCapHKD, progressLabel: `额外现金回赠 ${money(p.chillExtraReward)} / ${money(chill.monthlyExtraRewardCapHKD)}`, remainingSpend: (chill.monthlyExtraRewardCapHKD - p.chillExtraReward) / chill.extraRate, advice: '额外 4.6% 现金回赠按共享奖励池计算。' }));
+  }
+
+  if (state.region === 'OVERSEAS') {
+    const aeonOverseas = r.aeon_purple.OVERSEAS.general;
+    const unpricedNote = p.aeonOverseasUnpricedCount ? `；另有 ${p.aeonOverseasUnpricedCount} 笔外币交易因 iCost 没有 HKD 等值，暂未计入金额进度` : '';
+    cards.push(progressCard({ title: 'AEON Purple · 其他外币 / 海外', rate: '6% gross · ≈5% net', progressUsed: p.aeonOverseasExtraReward, progressCap: aeonOverseas.monthlyExtraRewardCapHKD, progressLabel: `额外奖励 ${money(p.aeonOverseasExtraReward)} / ${money(aeonOverseas.monthlyExtraRewardCapHKD)}`, stats: [{ label: '已计价消费', value: money(p.aeonOverseasSpend) }, { label: '预计净回赠', value: money(p.aeonOverseasNetReward) }], remainingSpend: remainingFromExtraCap(aeonOverseas, p.aeonOverseasExtraReward), advice: `已登记 2026/08–10 活动；其他外币/海外额外奖励池每月约 HK$200，按 1% 手续费后净值约 5%${unpricedNote}。` }));
+
+    const chill = r.bochk_chill.overseas;
+    cards.push(progressCard({ title: 'Chill World · 海外/网上', rate: '≈3.05% net', progressUsed: p.chillExtraReward, progressCap: chill.monthlyExtraRewardCapHKD, progressLabel: `额外现金回赠 ${money(p.chillExtraReward)} / ${money(chill.monthlyExtraRewardCapHKD)}`, remainingSpend: (chill.monthlyExtraRewardCapHKD - p.chillExtraReward) / chill.extraRate, advice: '以非 HKD 签账时扣除约 1.95% 手续费。' }));
+
+    cards.push(redProgressCard(p, 'HSBC Red · 海外网购'));
+    cards.push(progressCard({ title: 'Mox Credit · 海外后备', rate: '0% FX + Miles', advice: '高回赠池用完后的无外币手续费后备方案。' }));
+  }
+
+  panel.classList.remove('empty-state');
+  panel.innerHTML = `<div class="section-heading"><div><p class="eyebrow">${state.region}</p><h2>${state.monthKey} 消费建议</h2></div></div><div class="reward-list">${cards.join('')}</div>`;
+}
+
+function sortValue(tx, key) {
+  switch (key) {
+    case 'date': return tx.date?.getTime() ?? null;
+    case 'card': return tx.card?.name ?? '';
+    case 'ledger': return tx.ledger;
+    case 'merchant': return tx.merchant;
+    case 'region': return tx.region;
+    case 'amount': return tx.amount;
+    case 'rule': return tx.label;
+    case 'reward': return tx.rewardHKD;
+    default: return '';
+  }
+}
+
+function sortEvaluated(evaluated) {
+  const { key, direction } = state.tableSort;
+  const multiplier = direction === 'asc' ? 1 : -1;
+  return [...evaluated].sort((a, b) => {
+    const av = sortValue(a, key);
+    const bv = sortValue(b, key);
+    const aNull = av == null || Number.isNaN(av);
+    const bNull = bv == null || Number.isNaN(bv);
+    if (aNull && bNull) return a.sourceIndex - b.sourceIndex;
+    if (aNull) return 1;
+    if (bNull) return -1;
+    if (typeof av === 'number' && typeof bv === 'number') {
+      const diff = av - bv;
+      return diff === 0 ? a.sourceIndex - b.sourceIndex : diff * multiplier;
+    }
+    const diff = textCollator.compare(String(av), String(bv));
+    return diff === 0 ? a.sourceIndex - b.sourceIndex : diff * multiplier;
+  });
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll('th[data-sort-key]').forEach(th => {
+    const indicator = th.querySelector('.sort-indicator');
+    const active = th.dataset.sortKey === state.tableSort.key;
+    th.classList.toggle('sort-active', active);
+    if (indicator) indicator.textContent = active ? (state.tableSort.direction === 'asc' ? '▲' : '▼') : '↕';
+    th.setAttribute('aria-sort', active ? (state.tableSort.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+  });
+}
+
+function renderTransactions(evaluated) {
+  const body = $('#transactionTableBody');
+  if (!evaluated.length) {
+    body.innerHTML = '<tr><td colspan="8" class="muted">本月没有符合条件的信用卡消费。</td></tr>';
+    updateSortHeaders();
+    return;
+  }
+  body.innerHTML = sortEvaluated(evaluated).map(tx => `<tr>
+    <td>${formatDate(tx.date)}</td>
+    <td>${tx.card.name}</td>
+    <td>${tx.ledger}</td>
+    <td><strong>${tx.merchant}</strong><br><span class="muted">${tx.originalMerchant || '—'}</span></td>
+    <td>${tx.region}</td>
+    <td>${tx.currency} ${tx.amount.toFixed(2)}</td>
+    <td>${tx.label}<br><span class="muted">${tx.netRate != null ? `净 ${pct(tx.netRate)}` : ''}</span></td>
+    <td>${money(tx.rewardHKD)}</td>
+  </tr>`).join('');
+  updateSortHeaders();
+}
+
+async function handleWorkbook(file) {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true, dense: true });
+  const sheetName = workbook.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+  state.transactions = parseRows(rows);
+  const result = evaluate(state.transactions);
+  state.lastResult = result;
+  state.evaluated = result.evaluated;
+  state.sourceFile = file.name;
+
+  const dateRange = state.sourceDateMin && state.sourceDateMax ? `${formatFullDate(state.sourceDateMin)} → ${formatFullDate(state.sourceDateMax)}` : '日期范围未知';
+  $('#dataUpdated').textContent = `${state.monthKey || '—'} · ${file.name} · ${dateRange}`;
+  $('#transactionCount').textContent = `${state.transactions.length} 笔`;
+  $('#filterNote').textContent = `已纳入账本：${configuredLedgers().join(' + ')}；仅统计信用卡白名单消费`;
+  renderTransactions(state.evaluated);
+  renderSummary(result);
+
+  localStorage.setItem('cardmax:lastMeta', JSON.stringify({ file: file.name, month: state.monthKey, count: state.transactions.length, importedAt: new Date().toISOString() }));
+}
+
+function wireUI() {
+  $('#syncButton').addEventListener('click', () => $('#fileInput').click());
+  $('#fileInput').addEventListener('change', async (event) => {
+    const [file] = event.target.files;
+    if (!file) return;
+    try {
+      $('#syncButton').textContent = '读取中…';
+      $('#syncButton').disabled = true;
+      await handleWorkbook(file);
+    } catch (error) {
+      console.error(error);
+      alert(`无法读取 iCost XLSX：${error.message}\n\n请保留该文件，我们会用它继续改进 importer。`);
+    } finally {
+      $('#syncButton').textContent = '同步 iCost';
+      $('#syncButton').disabled = false;
+      event.target.value = '';
+    }
+  });
+
+  document.querySelectorAll('.region-tab').forEach(button => {
+    button.addEventListener('click', () => {
+      document.querySelectorAll('.region-tab').forEach(b => b.classList.remove('active'));
+      button.classList.add('active');
+      state.region = button.dataset.region;
+      if (state.lastResult) renderSummary(state.lastResult);
+    });
+  });
+
+  document.querySelectorAll('th[data-sort-key]').forEach(th => {
+    th.addEventListener('click', () => {
+      const key = th.dataset.sortKey;
+      if (state.tableSort.key === key) {
+        state.tableSort.direction = state.tableSort.direction === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.tableSort = { key, direction: 'asc' };
+      }
+      renderTransactions(state.evaluated);
+    });
+    th.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        th.click();
+      }
+    });
+  });
+  updateSortHeaders();
+}
+
+async function boot() {
+  await loadConfig();
+  wireUI();
+  const meta = JSON.parse(localStorage.getItem('cardmax:lastMeta') || 'null');
+  if (meta) $('#dataUpdated').textContent = `上次：${meta.month} · ${meta.file}`;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(console.warn);
+}
+
+boot().catch(error => {
+  console.error(error);
+  $('#rulesVersion').textContent = '规则加载失败';
+});
