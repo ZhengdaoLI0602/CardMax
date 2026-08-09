@@ -1,12 +1,13 @@
 {
-  "version": "2026-08-09.1",
+  "version": "2026-08-09.2",
   "profile": {
     "ledger": "manhu budget",
     "ledgers": ["manhu budget", "dogi budget"],
     "regionByCurrency": {"CNY":"CN","HKD":"HK","*":"OVERSEAS"},
     "defaultChannels": {
       "bochk_go": {"CN":"AP_OR_UNIONPAY_QR","HK":"APPLE_PAY"},
-      "hsbc_pulse": {"CN":"APPLE_PAY"}
+      "hsbc_pulse": {"CN":"APPLE_PAY"},
+      "aeon_purple": {"HK":"MOBILE_PAYMENT"}
     }
   },
   "cards": {
@@ -25,9 +26,55 @@
       }
     },
     "aeon_purple": {
-      "HK": {"localSelected":{"grossRate":0.06,"netRate":0.06,"label":"AEON 本地餐饮/交通等约 6%"}},
-      "CN": {"general":{"grossRate":0.06,"foreignFeeRate":0.01,"netRate":0.05,"label":"AEON 内地约 6% gross / 5% net"}},
-      "OVERSEAS": {"general":{"grossRate":0.06,"foreignFeeRate":0.01,"netRate":0.05,"label":"AEON 海外约 6% gross / 5% net"}}
+      "baseRate": 0.004,
+      "HK": {
+        "diningMobile": {
+          "grossRate": 0.06,
+          "baseRate": 0.004,
+          "extraRate": 0.056,
+          "monthlyExtraRewardCapHKD": 100,
+          "label": "AEON 本地餐饮手机支付最高 6%"
+        },
+        "transportMobile": {
+          "grossRate": 0.06,
+          "baseRate": 0.004,
+          "extraRate": 0.056,
+          "monthlyExtraRewardCapHKD": 100,
+          "label": "AEON 本地交通手机支付最高 6%"
+        },
+        "other": {
+          "grossRate": 0.004,
+          "label": "AEON 本地其他签账基本奖赏 0.4%"
+        }
+      },
+      "CN": {
+        "general": {
+          "grossRate": 0.06,
+          "baseRate": 0.004,
+          "extraRate": 0.056,
+          "monthlyExtraRewardCapHKD": 100,
+          "foreignFeeRate": 0.01,
+          "netRate": 0.05,
+          "label": "AEON 内地/澳门/台湾 6% gross / 约 5% net",
+          "promoStart": "2026-08-01",
+          "promoEnd": "2026-10-31",
+          "registered": true
+        }
+      },
+      "OVERSEAS": {
+        "general": {
+          "grossRate": 0.06,
+          "baseRate": 0.004,
+          "extraRate": 0.056,
+          "monthlyExtraRewardCapHKD": 200,
+          "foreignFeeRate": 0.01,
+          "netRate": 0.05,
+          "label": "AEON 其他外币/海外 6% gross / 约 5% net",
+          "promoStart": "2026-08-01",
+          "promoEnd": "2026-10-31",
+          "registered": true
+        }
+      }
     },
     "hsbc_red": {
       "online":{"grossRate":0.04,"baseRate":0.004,"monthlySpendCapHKD":10000,"foreignFeeRate":0.0195,"label":"Red 网购 4%（首 HK$10,000）"},
@@ -50,10 +97,12 @@
     }
   },
   "notes": [
-    "v0.1 uses user-confirmed default payment-channel assumptions for Go and Pulse.",
+    "v0.1.2 uses user-confirmed default payment-channel assumptions for Go and Pulse.",
     "CardMax includes credit-card transactions from both manhu budget and dogi budget.",
+    "AEON local dining and local transport are tracked as separate HK$100 monthly extra-reward pools under the registered Purple lifestyle promotion; mobile payment is the default optimisation assumption.",
+    "AEON Mainland/Macau/Taiwan and other overseas/foreign-currency promotions are tracked separately at HK$100 and HK$200 monthly extra-reward caps respectively for Aug-Oct 2026.",
     "For HKD transactions, foreign-currency fees are zero even when the merchant is an airline or overseas travel service.",
-    "For non-HKD/CNY currencies, v0.1 does not invent an FX rate; reward HKD estimates are shown only when an HKD-equivalent amount can be determined safely.",
+    "For non-HKD/CNY currencies, v0.1.2 does not invent an FX rate; exact HKD progress remains unavailable until an HKD-equivalent conversion source is added.",
     "Bank rules are configuration data and should be reviewed monthly before updating this file."
   ]
 }
