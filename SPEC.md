@@ -1,4 +1,4 @@
-# CardMax v0.1 Specification
+# CardMax v0.1.1 Specification
 
 ## Goal
 
@@ -19,12 +19,12 @@ PWA limitation: CardMax does not silently scan `On My iPhone/CardMax` in the bac
 
 Only transactions satisfying all conditions are analysed:
 
-- `Ledger = manhu budget`
+- `Ledger` is in the configured ledger whitelist: `manhu budget`, `dogi budget`
 - `Type = Expense`
 - `Amount < 0`
 - `Account 1` exists in `config/cards.json` and is enabled
 
-Examples intentionally excluded: Alipay, WechatPay, BOC debit cards and all other non-whitelisted accounts.
+All qualifying credit-card transactions from the enabled ledgers are pooled into the same monthly reward calculation. Examples intentionally excluded: Alipay, WechatPay, BOC debit cards and all other non-whitelisted accounts.
 
 ## Region classification
 
@@ -32,7 +32,7 @@ Examples intentionally excluded: Alipay, WechatPay, BOC debit cards and all othe
 - `HKD -> HK`
 - all other currencies -> `OVERSEAS`
 
-No address-based correction is performed in v0.1.
+No address-based correction is performed in v0.1.1.
 
 ## Account mapping
 
@@ -115,6 +115,6 @@ Examples:
 
 Bank promotion parameters live in `config/rules.json` and should be reviewed monthly. Application code should not be rewritten merely because a bank changes a percentage, cap, promotion date or merchant list.
 
-## v0.1 known limitation
+## v0.1.1 known limitation
 
 CardMax does not invent FX rates. Exact HKD reward estimates are produced where an HKD-equivalent amount is safe under the configured rule. Overseas currencies can still be classified and recommended even when an exact HKD reward amount is unavailable.
