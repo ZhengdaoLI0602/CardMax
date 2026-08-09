@@ -14,6 +14,7 @@ const state = {
 
 const ONLINE_MERCHANTS = new Set(['AGODA', 'CHINA_EASTERN', 'EXPEDIA', 'JD', 'PINDUODUO']);
 const DINING_WORDS = ['restaurant', 'dining', 'food', '餐饮', '正餐', '美食', '快餐', '烧烤', '火锅'];
+const TRANSPORT_WORDS = ['transport', 'traffic', 'taxi', 'uber', 'mtr', 'metro', 'rail', 'bus', 'tram', 'ferry', '交通', '出行', '港铁', '地铁', '巴士', '公交', '的士', '出租车', '高铁', '隧道', '电车', '渡轮'];
 
 async function loadConfig() {
   const [cards, aliases, rules] = await Promise.all([
@@ -96,6 +97,12 @@ function isDining(tx) {
   return DINING_WORDS.some(word => text.includes(word));
 }
 
+function isLocalTransport(tx) {
+  if (tx.merchant === 'MTR') return true;
+  const text = `${tx.firstCategory} ${tx.secondCategory} ${tx.originalMerchant} ${tx.merchant}`.toLowerCase();
+  return TRANSPORT_WORDS.some(word => text.includes(word));
+}
+
 function isOnline(tx) {
   if (ONLINE_MERCHANTS.has(tx.merchant)) return true;
   const text = `${tx.firstCategory} ${tx.secondCategory} ${tx.originalMerchant}`.toLowerCase();
@@ -103,6 +110,8 @@ function isOnline(tx) {
 }
 
 function hkdEquivalent(tx) {
+  // CNY is intentionally treated as 1:1 HKD-equivalent promo units in v0.1.x,
+  // matching the user's simplified reward-cap model. HKD is exact.
   if (tx.currency === 'HKD' || tx.currency === 'CNY') return tx.amount;
   return null;
 }
@@ -167,6 +176,22 @@ function applyTieredReward(amount, rate, baseRate, spendUsed, spendCap) {
   };
 }
 
+function applyExtraRewardCap(amount, rule, extraUsed, feeRate = 0) {
+  const extraCap = rule.monthlyExtraRewardCapHKD ?? 0;
+  const remainingExtra = Math.max(0, extraCap - extraUsed);
+  const extraReward = Math.min(amount * rule.extraRate, remainingExtra);
+  const grossReward = amount * rule.baseRate + extraReward;
+  const fee = amount * feeRate;
+  const netReward = grossReward - fee;
+  return {
+    extraReward,
+    grossReward,
+    netReward,
+    grossRate: amount ? grossReward / amount : 0,
+    netRate: amount ? netReward / amount : 0
+  };
+}
+
 function evaluate(transactions) {
   const r = state.rules.cards;
   const pools = {
@@ -174,7 +199,22 @@ function evaluate(transactions) {
     goMobileBonusReward: 0,
     redOnlineSpend: 0,
     chillExtraReward: 0,
-    pulseDiningBonusReward: 0
+    pulseCNSpend: 0,
+    pulseCNReward: 0,
+    pulseDiningBonusReward: 0,
+    aeonHKDiningSpend: 0,
+    aeonHKDiningExtraReward: 0,
+    aeonHKDiningReward: 0,
+    aeonHKTransportSpend: 0,
+    aeonHKTransportExtraReward: 0,
+    aeonHKTransportReward: 0,
+    aeonCNSpend: 0,
+    aeonCNExtraReward: 0,
+    aeonCNNetReward: 0,
+    aeonOverseasSpend: 0,
+    aeonOverseasExtraReward: 0,
+    aeonOverseasNetReward: 0,
+    aeonOverseasUnpricedCount: 0
   };
 
   const hsbcCNSpend = transactions
@@ -243,30 +283,85 @@ function evaluate(transactions) {
       const rule = r.hsbc_pulse.CN.applePay;
       grossRate = netRate = rule.grossRate;
       label = rule.label;
-      if (isDining(tx) && pulseThresholdMet) {
+      if (amountHKD != null) pools.pulseCNSpend += amountHKD;
+
+      let diningBonus = 0;
+      if (isDining(tx) && pulseThresholdMet && amountHKD != null) {
         const bonusRule = r.hsbc_pulse.CN.diningBonus;
         const remaining = Math.max(0, bonusRule.monthlyRewardCapHKD - pools.pulseDiningBonusReward);
-        const bonus = amountHKD == null ? null : Math.min(amountHKD * bonusRule.extraRate, remaining);
-        if (bonus != null) pools.pulseDiningBonusReward += bonus;
+        diningBonus = Math.min(amountHKD * bonusRule.extraRate, remaining);
+        pools.pulseDiningBonusReward += diningBonus;
         grossRate += bonusRule.extraRate;
         netRate = grossRate;
         label += ' + 餐饮额外 3%';
-        if (amountHKD != null) rewardHKD = amountHKD * rule.grossRate + bonus;
-      } else if (amountHKD != null) {
-        rewardHKD = amountHKD * grossRate;
+      }
+      if (amountHKD != null) {
+        rewardHKD = amountHKD * rule.grossRate + diningBonus;
+        pools.pulseCNReward += rewardHKD;
       }
     }
 
     if (tx.card.id === 'aeon_purple') {
-      let rule = null;
-      if (tx.region === 'CN') rule = r.aeon_purple.CN.general;
-      if (tx.region === 'OVERSEAS') rule = r.aeon_purple.OVERSEAS.general;
-      if (tx.region === 'HK' && (isDining(tx) || tx.merchant === 'MTR')) rule = r.aeon_purple.HK.localSelected;
-      if (rule) {
+      const aeon = r.aeon_purple;
+      if (tx.region === 'HK' && isDining(tx)) {
+        const rule = aeon.HK.diningMobile;
+        grossRate = netRate = rule.grossRate;
+        label = rule.label;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonHKDiningExtraReward, 0);
+          pools.aeonHKDiningSpend += amountHKD;
+          pools.aeonHKDiningExtraReward += calc.extraReward;
+          pools.aeonHKDiningReward += calc.grossReward;
+          rewardHKD = calc.grossReward;
+          grossRate = netRate = calc.grossRate;
+        }
+      } else if (tx.region === 'HK' && isLocalTransport(tx)) {
+        const rule = aeon.HK.transportMobile;
+        grossRate = netRate = rule.grossRate;
+        label = rule.label;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonHKTransportExtraReward, 0);
+          pools.aeonHKTransportSpend += amountHKD;
+          pools.aeonHKTransportExtraReward += calc.extraReward;
+          pools.aeonHKTransportReward += calc.grossReward;
+          rewardHKD = calc.grossReward;
+          grossRate = netRate = calc.grossRate;
+        }
+      } else if (tx.region === 'HK') {
+        const rule = aeon.HK.other;
+        grossRate = netRate = rule.grossRate;
+        label = rule.label;
+        if (amountHKD != null) rewardHKD = amountHKD * rule.grossRate;
+      } else if (tx.region === 'CN') {
+        const rule = aeon.CN.general;
         grossRate = rule.grossRate;
         netRate = rule.netRate;
         label = rule.label;
-        if (amountHKD != null) rewardHKD = amountHKD * netRate;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonCNExtraReward, rule.foreignFeeRate);
+          pools.aeonCNSpend += amountHKD;
+          pools.aeonCNExtraReward += calc.extraReward;
+          pools.aeonCNNetReward += calc.netReward;
+          rewardHKD = calc.netReward;
+          grossRate = calc.grossRate;
+          netRate = calc.netRate;
+        }
+      } else if (tx.region === 'OVERSEAS') {
+        const rule = aeon.OVERSEAS.general;
+        grossRate = rule.grossRate;
+        netRate = rule.netRate;
+        label = rule.label;
+        if (amountHKD != null) {
+          const calc = applyExtraRewardCap(amountHKD, rule, pools.aeonOverseasExtraReward, rule.foreignFeeRate);
+          pools.aeonOverseasSpend += amountHKD;
+          pools.aeonOverseasExtraReward += calc.extraReward;
+          pools.aeonOverseasNetReward += calc.netReward;
+          rewardHKD = calc.netReward;
+          grossRate = calc.grossRate;
+          netRate = calc.netRate;
+        } else {
+          pools.aeonOverseasUnpricedCount += 1;
+        }
       }
     }
 
@@ -292,7 +387,7 @@ function evaluate(transactions) {
       netRate = null;
     }
 
-    return { ...tx, amountHKD, label, grossRate, netRate, rewardHKD, online: isOnline(tx), dining: isDining(tx) };
+    return { ...tx, amountHKD, label, grossRate, netRate, rewardHKD, online: isOnline(tx), dining: isDining(tx), localTransport: isLocalTransport(tx) };
   });
 
   return { evaluated, pools, hsbcCNSpend, pulseThresholdMet };
@@ -300,22 +395,51 @@ function evaluate(transactions) {
 
 function money(value) {
   if (value == null || Number.isNaN(value)) return '—';
-  return `HK$${value.toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const sign = value < 0 ? '-' : '';
+  const absolute = Math.abs(value);
+  return `${sign}HK$${absolute.toLocaleString('en-HK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 function pct(value) {
   if (value == null) return '—';
-  return `${(value * 100).toFixed(value * 100 < 10 ? 2 : 1).replace(/\.00$/, '')}%`;
+  return `${(value * 100).toFixed(Math.abs(value * 100) < 10 ? 2 : 1).replace(/\.00$/, '')}%`;
 }
 
-function progressCard({ title, rate, used, cap, remainingSpend, advice, warning = false }) {
-  const ratio = cap ? Math.min(1, used / cap) : 0;
+function progressCard({
+  title,
+  rate,
+  progressUsed = null,
+  progressCap = null,
+  progressLabel = '',
+  remainingSpend = null,
+  remainingLabel = '高回赠还可刷约',
+  stats = [],
+  advice = '',
+  warning = false
+}) {
+  const hasProgress = progressUsed != null && progressCap != null && progressCap > 0;
+  const ratio = hasProgress ? Math.min(1, Math.max(0, progressUsed / progressCap)) : 0;
+  const statHtml = stats.length
+    ? `<div class="reward-stats">${stats.map(stat => `<div class="reward-stat"><span>${stat.label}</span><strong>${stat.value}</strong></div>`).join('')}</div>`
+    : '';
   return `<article class="reward-card">
-    <header><div><div class="reward-title">${title}</div><div class="reward-meta">${cap ? `${money(used)} / ${money(cap)}` : advice}</div></div><div class="reward-rate">${rate}</div></header>
-    ${cap ? `<div class="progress"><span style="width:${ratio * 100}%"></span></div>` : ''}
-    ${remainingSpend != null ? `<div class="reward-meta">高回赠还可刷约 <strong>${money(Math.max(0, remainingSpend))}</strong></div>` : ''}
+    <header>
+      <div>
+        <div class="reward-title">${title}</div>
+        ${progressLabel ? `<div class="reward-meta">${progressLabel}</div>` : ''}
+      </div>
+      <div class="reward-rate">${rate}</div>
+    </header>
+    ${hasProgress ? `<div class="progress"><span style="width:${ratio * 100}%"></span></div>` : ''}
+    ${statHtml}
+    ${remainingSpend != null ? `<div class="reward-meta reward-remaining">${remainingLabel} <strong>${money(Math.max(0, remainingSpend))}</strong></div>` : ''}
     ${advice ? `<div class="reward-advice ${warning ? 'warning' : ''}">${advice}</div>` : ''}
   </article>`;
+}
+
+function remainingFromExtraCap(rule, usedExtra) {
+  if (!rule?.extraRate) return null;
+  return Math.max(0, (rule.monthlyExtraRewardCapHKD - usedExtra) / rule.extraRate);
 }
 
 function renderSummary(result) {
@@ -327,70 +451,194 @@ function renderSummary(result) {
   if (state.region === 'CN') {
     const goDesignated = r.bochk_go.CN.designatedMerchants;
     cards.push(progressCard({
-      title: 'BOCHK Go · 指定商户', rate: '5%', used: p.goDesignatedReward, cap: goDesignated.monthlyRewardCapHKD,
+      title: 'BOCHK Go · 指定商户',
+      rate: '5%',
+      progressUsed: p.goDesignatedReward,
+      progressCap: goDesignated.monthlyRewardCapHKD,
+      progressLabel: `已赚 ${money(p.goDesignatedReward)} / ${money(goDesignated.monthlyRewardCapHKD)}`,
       remainingSpend: (goDesignated.monthlyRewardCapHKD - p.goDesignatedReward) / goDesignated.grossRate,
       advice: 'MEITUAN 等确认的指定商户优先匹配此奖励池。'
     }));
+
     const goMobile = r.bochk_go.CN.mobile;
     cards.push(progressCard({
-      title: 'BOCHK Go · AP / 云闪付', rate: '≈8%', used: p.goMobileBonusReward, cap: goMobile.bonusEquivalentCapHKD,
+      title: 'BOCHK Go · AP / 云闪付',
+      rate: '≈8%',
+      progressUsed: p.goMobileBonusReward,
+      progressCap: goMobile.bonusEquivalentCapHKD,
+      progressLabel: `额外积分等值 ${money(p.goMobileBonusReward)} / ${money(goMobile.bonusEquivalentCapHKD)}`,
       remainingSpend: (goMobile.bonusEquivalentCapHKD - p.goMobileBonusReward) / (goMobile.grossRate - goMobile.baseRate),
       advice: 'CN 与 HK 手机支付共用额外积分池。'
     }));
+
     const target = r.hsbc_pulse.CN.mainlandMonthlyThreshold.amountHKD;
     const remaining = Math.max(0, target - result.hsbcCNSpend);
     cards.push(progressCard({
-      title: 'HSBC · 内地月消费门槛', rate: result.pulseThresholdMet ? '已达标' : 'HK$1,200',
-      used: result.hsbcCNSpend, cap: target,
-      advice: result.pulseThresholdMet ? '已达到本月门槛；合资格 Pulse 内地餐饮可享额外 3%。' : `本月还需约 ${money(remaining)} 合资格 HSBC 内地消费。`,
+      title: 'HSBC · 内地月消费门槛',
+      rate: result.pulseThresholdMet ? '已达标' : 'HK$1,200',
+      progressUsed: result.hsbcCNSpend,
+      progressCap: target,
+      progressLabel: `合资格 HSBC 内地消费 ${money(result.hsbcCNSpend)} / ${money(target)}`,
+      advice: result.pulseThresholdMet
+        ? '已达到本月门槛；合资格 Pulse 内地餐饮可享额外 3%。'
+        : `本月还需约 ${money(remaining)} 合资格 HSBC 内地消费。`,
       warning: !result.pulseThresholdMet
     }));
+
+    cards.push(progressCard({
+      title: 'HSBC Pulse · 内地 Apple Pay',
+      rate: '2.4% / 最高 5.4%',
+      progressUsed: p.pulseCNSpend,
+      progressCap: target,
+      progressLabel: `Pulse 本月消费 ${money(p.pulseCNSpend)} · 以 HK$1,200 门槛作参考`,
+      stats: [
+        { label: 'Pulse 本月消费', value: money(p.pulseCNSpend) },
+        { label: '预计回赠', value: money(p.pulseCNReward) }
+      ],
+      advice: '普通内地 Apple Pay 按 2.4% 估算；真正 HK$1,200 门槛按你所有合资格 HSBC 内地签账合并计算。'
+    }));
+
     const dining = r.hsbc_pulse.CN.diningBonus;
     cards.push(progressCard({
-      title: 'HSBC Pulse · 内地餐饮 Bonus', rate: '最高 5.4%', used: p.pulseDiningBonusReward, cap: dining.monthlyRewardCapHKD,
+      title: 'HSBC Pulse · 内地餐饮 Bonus',
+      rate: '+3% · 最高 5.4%',
+      progressUsed: p.pulseDiningBonusReward,
+      progressCap: dining.monthlyRewardCapHKD,
+      progressLabel: `额外餐饮回赠 ${money(p.pulseDiningBonusReward)} / ${money(dining.monthlyRewardCapHKD)}`,
       remainingSpend: (dining.monthlyRewardCapHKD - p.pulseDiningBonusReward) / dining.extraRate,
-      advice: '默认 Pulse 内地付款渠道为 Apple Pay。'
+      remainingLabel: '额外 3% 还可覆盖约',
+      advice: result.pulseThresholdMet ? '本月门槛已达标；后续合资格内地餐饮可继续吃 3% Bonus。' : '需先达到本月 HK$1,200 合资格 HSBC 内地消费门槛。',
+      warning: !result.pulseThresholdMet
     }));
-    cards.push(progressCard({ title: 'AEON Purple · 内地', rate: '≈5% net', advice: '当前规则：6% 积分等值 − 1% 外币手续费。' }));
+
+    const aeonCN = r.aeon_purple.CN.general;
+    cards.push(progressCard({
+      title: 'AEON Purple · 内地 / 澳门 / 台湾',
+      rate: '6% gross · ≈5% net',
+      progressUsed: p.aeonCNExtraReward,
+      progressCap: aeonCN.monthlyExtraRewardCapHKD,
+      progressLabel: `额外奖励 ${money(p.aeonCNExtraReward)} / ${money(aeonCN.monthlyExtraRewardCapHKD)}`,
+      stats: [
+        { label: '本月消费', value: money(p.aeonCNSpend) },
+        { label: '预计净回赠', value: money(p.aeonCNNetReward) }
+      ],
+      remainingSpend: remainingFromExtraCap(aeonCN, p.aeonCNExtraReward),
+      advice: '已登记 2026/08–10 活动；按 6% 积分等值、1% 外币手续费估算。额外奖励池吃满后应优先切换其他卡。'
+    }));
   }
 
   if (state.region === 'HK') {
     const go = r.bochk_go.HK.mobile;
     const sharedCap = r.bochk_go.CN.mobile.bonusEquivalentCapHKD;
     cards.push(progressCard({
-      title: 'BOCHK Go · 香港 AP', rate: '≈4%', used: p.goMobileBonusReward, cap: sharedCap,
+      title: 'BOCHK Go · 香港 AP',
+      rate: '≈4%',
+      progressUsed: p.goMobileBonusReward,
+      progressCap: sharedCap,
+      progressLabel: `额外积分等值 ${money(p.goMobileBonusReward)} / ${money(sharedCap)}`,
       remainingSpend: (sharedCap - p.goMobileBonusReward) / (go.grossRate - go.baseRate),
       advice: '与内地 Go 手机支付共用额外积分池。'
     }));
-    cards.push(progressCard({ title: 'AEON Purple · 本地餐饮/交通', rate: '≈6%', advice: '仅在符合当前本地指定类别规则时使用。' }));
+
+    const aeonDining = r.aeon_purple.HK.diningMobile;
+    cards.push(progressCard({
+      title: 'AEON Purple · 本地餐饮',
+      rate: '最高 6%',
+      progressUsed: p.aeonHKDiningExtraReward,
+      progressCap: aeonDining.monthlyExtraRewardCapHKD,
+      progressLabel: `额外奖励 ${money(p.aeonHKDiningExtraReward)} / ${money(aeonDining.monthlyExtraRewardCapHKD)}`,
+      stats: [
+        { label: '本月合资格餐饮', value: money(p.aeonHKDiningSpend) },
+        { label: '预计积分等值回赠', value: money(p.aeonHKDiningReward) }
+      ],
+      remainingSpend: remainingFromExtraCap(aeonDining, p.aeonHKDiningExtraReward),
+      advice: '按手机支付最高 6% 估算；本地餐饮类别每月额外奖励上限约 HK$100。'
+    }));
+
+    const aeonTransport = r.aeon_purple.HK.transportMobile;
+    cards.push(progressCard({
+      title: 'AEON Purple · 本地交通',
+      rate: '最高 6%',
+      progressUsed: p.aeonHKTransportExtraReward,
+      progressCap: aeonTransport.monthlyExtraRewardCapHKD,
+      progressLabel: `额外奖励 ${money(p.aeonHKTransportExtraReward)} / ${money(aeonTransport.monthlyExtraRewardCapHKD)}`,
+      stats: [
+        { label: '本月合资格交通', value: money(p.aeonHKTransportSpend) },
+        { label: '预计积分等值回赠', value: money(p.aeonHKTransportReward) }
+      ],
+      remainingSpend: remainingFromExtraCap(aeonTransport, p.aeonHKTransportExtraReward),
+      advice: 'MTR、巴士、Uber Taxi、隧道费、高铁等合资格本地交通按手机支付最高 6% 估算。'
+    }));
+
     const red = r.hsbc_red.online;
     cards.push(progressCard({
-      title: 'HSBC Red · 网购', rate: '4%', used: Math.min(p.redOnlineSpend, red.monthlySpendCapHKD), cap: red.monthlySpendCapHKD,
-      remainingSpend: Math.max(0, red.monthlySpendCapHKD - p.redOnlineSpend), advice: 'HKD 网购不收 1.95% 外币手续费。'
+      title: 'HSBC Red · 网购',
+      rate: '4%',
+      progressUsed: Math.min(p.redOnlineSpend, red.monthlySpendCapHKD),
+      progressCap: red.monthlySpendCapHKD,
+      progressLabel: `4% 网购额度 ${money(Math.min(p.redOnlineSpend, red.monthlySpendCapHKD))} / ${money(red.monthlySpendCapHKD)}`,
+      remainingSpend: Math.max(0, red.monthlySpendCapHKD - p.redOnlineSpend),
+      advice: 'HKD 网购不收 1.95% 外币手续费。'
     }));
+
     const chill = r.bochk_chill.online;
     cards.push(progressCard({
-      title: 'Chill World · 网购', rate: '5%', used: p.chillExtraReward, cap: chill.monthlyExtraRewardCapHKD,
+      title: 'Chill World · 网购',
+      rate: '5%',
+      progressUsed: p.chillExtraReward,
+      progressCap: chill.monthlyExtraRewardCapHKD,
+      progressLabel: `额外现金回赠 ${money(p.chillExtraReward)} / ${money(chill.monthlyExtraRewardCapHKD)}`,
       remainingSpend: (chill.monthlyExtraRewardCapHKD - p.chillExtraReward) / chill.extraRate,
       advice: '额外 4.6% 现金回赠按共享奖励池计算。'
     }));
   }
 
   if (state.region === 'OVERSEAS') {
-    cards.push(progressCard({ title: 'AEON Purple · 海外', rate: '≈5% net', advice: '当前登记活动按 6% 积分等值 − 1% 手续费估算。' }));
+    const aeonOverseas = r.aeon_purple.OVERSEAS.general;
+    const unpricedNote = p.aeonOverseasUnpricedCount
+      ? `；另有 ${p.aeonOverseasUnpricedCount} 笔外币交易因 iCost 没有 HKD 等值，暂未计入金额进度`
+      : '';
+    cards.push(progressCard({
+      title: 'AEON Purple · 其他外币 / 海外',
+      rate: '6% gross · ≈5% net',
+      progressUsed: p.aeonOverseasExtraReward,
+      progressCap: aeonOverseas.monthlyExtraRewardCapHKD,
+      progressLabel: `额外奖励 ${money(p.aeonOverseasExtraReward)} / ${money(aeonOverseas.monthlyExtraRewardCapHKD)}`,
+      stats: [
+        { label: '已计价消费', value: money(p.aeonOverseasSpend) },
+        { label: '预计净回赠', value: money(p.aeonOverseasNetReward) }
+      ],
+      remainingSpend: remainingFromExtraCap(aeonOverseas, p.aeonOverseasExtraReward),
+      advice: `已登记 2026/08–10 活动；其他外币/海外额外奖励池每月约 HK$200，按 1% 手续费后净值约 5%${unpricedNote}。`
+    }));
+
     const chill = r.bochk_chill.overseas;
     cards.push(progressCard({
-      title: 'Chill World · 海外/网上', rate: '≈3.05% net', used: p.chillExtraReward, cap: chill.monthlyExtraRewardCapHKD,
+      title: 'Chill World · 海外/网上',
+      rate: '≈3.05% net',
+      progressUsed: p.chillExtraReward,
+      progressCap: chill.monthlyExtraRewardCapHKD,
+      progressLabel: `额外现金回赠 ${money(p.chillExtraReward)} / ${money(chill.monthlyExtraRewardCapHKD)}`,
       remainingSpend: (chill.monthlyExtraRewardCapHKD - p.chillExtraReward) / chill.extraRate,
       advice: '以非 HKD 签账时扣除约 1.95% 手续费。'
     }));
+
     const red = r.hsbc_red.online;
     cards.push(progressCard({
-      title: 'HSBC Red · 海外网购', rate: '≈2.05% net', used: Math.min(p.redOnlineSpend, red.monthlySpendCapHKD), cap: red.monthlySpendCapHKD,
+      title: 'HSBC Red · 海外网购',
+      rate: '≈2.05% net',
+      progressUsed: Math.min(p.redOnlineSpend, red.monthlySpendCapHKD),
+      progressCap: red.monthlySpendCapHKD,
+      progressLabel: `4% 网购额度 ${money(Math.min(p.redOnlineSpend, red.monthlySpendCapHKD))} / ${money(red.monthlySpendCapHKD)}`,
       remainingSpend: Math.max(0, red.monthlySpendCapHKD - p.redOnlineSpend),
       advice: '日本 SUICA / FamilyMart 等指定商户应优先使用独立 8% 规则。'
     }));
-    cards.push(progressCard({ title: 'Mox Credit · 海外后备', rate: '0% FX + Miles', advice: '高回赠池用完后的无外币手续费后备方案。' }));
+
+    cards.push(progressCard({
+      title: 'Mox Credit · 海外后备',
+      rate: '0% FX + Miles',
+      advice: '高回赠池用完后的无外币手续费后备方案。'
+    }));
   }
 
   panel.classList.remove('empty-state');
