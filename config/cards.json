@@ -1,0 +1,9 @@
+{
+  "AEON 7418": {"id":"aeon_purple","name":"AEON Purple UnionPay","enabled":true},
+  "HSBC 6287": {"id":"hsbc_red","name":"HSBC Red","enabled":true},
+  "HSBC 3789": {"id":"hsbc_pulse","name":"HSBC Pulse","enabled":true},
+  "Mox 4362": {"id":"mox_credit","name":"Mox Credit","enabled":true},
+  "BOCHK 0111": {"id":"bochk_go","name":"BOCHK Go","enabled":true},
+  "BOCHK 0035": {"id":"bochk_chill","name":"BOCHK Chill World","enabled":true},
+  "MMPOWER": {"id":"mmpower","name":"Hang Seng MMPOWER","enabled":false,"planned":true}
+}
