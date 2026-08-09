@@ -1,0 +1,57 @@
+{
+  "version": "2026-08-09",
+  "profile": {
+    "ledger": "manhu budget",
+    "regionByCurrency": {"CNY":"CN","HKD":"HK","*":"OVERSEAS"},
+    "defaultChannels": {
+      "bochk_go": {"CN":"AP_OR_UNIONPAY_QR","HK":"APPLE_PAY"},
+      "hsbc_pulse": {"CN":"APPLE_PAY"}
+    }
+  },
+  "cards": {
+    "bochk_go": {
+      "CN": {
+        "designatedMerchants": {"merchants":["MEITUAN"],"grossRate":0.05,"monthlyRewardCapHKD":100,"priority":100,"label":"Go 指定商户 5%"},
+        "mobile": {"grossRate":0.08,"baseRate":0.004,"bonusEquivalentCapHKD":100,"bonusMultiplier":19,"priority":50,"label":"Go 内地 AP/云闪付约 8%"}
+      },
+      "HK": {"mobile":{"grossRate":0.04,"baseRate":0.004,"bonusMultiplier":9,"label":"Go 香港 AP 约 4%"}}
+    },
+    "hsbc_pulse": {
+      "CN": {
+        "applePay":{"grossRate":0.024,"label":"Pulse 内地 AP 2.4%"},
+        "mainlandMonthlyThreshold":{"amountHKD":1200,"registered":true,"label":"HSBC 内地月消费门槛"},
+        "diningBonus":{"extraRate":0.03,"monthlyRewardCapHKD":80,"registered":true,"label":"内地餐饮额外 3%"}
+      }
+    },
+    "aeon_purple": {
+      "HK": {"localSelected":{"grossRate":0.06,"netRate":0.06,"label":"AEON 本地餐饮/交通等约 6%"}},
+      "CN": {"general":{"grossRate":0.06,"foreignFeeRate":0.01,"netRate":0.05,"label":"AEON 内地约 6% gross / 5% net"}},
+      "OVERSEAS": {"general":{"grossRate":0.06,"foreignFeeRate":0.01,"netRate":0.05,"label":"AEON 海外约 6% gross / 5% net"}}
+    },
+    "hsbc_red": {
+      "online":{"grossRate":0.04,"baseRate":0.004,"monthlySpendCapHKD":10000,"foreignFeeRate":0.0195,"label":"Red 网购 4%（首 HK$10,000）"},
+      "octopus":{"grossRate":0.004,"label":"HSBC 八达通增值 0.4%"},
+      "japanSpecial":{"merchants":["SUICA","FAMILYMART"],"grossRate":0.08,"monthlySpendCapHKD":1250,"label":"Red 日本指定商户 8%"}
+    },
+    "bochk_chill": {
+      "online":{"grossRate":0.05,"baseRate":0.004,"extraRate":0.046,"monthlyExtraRewardCapHKD":150,"foreignFeeRate":0.0195,"label":"Chill World 网上签账 5%"},
+      "overseas":{"grossRate":0.05,"baseRate":0.004,"extraRate":0.046,"monthlyExtraRewardCapHKD":150,"foreignFeeRate":0.0195,"label":"Chill World 海外签账 5%"}
+    },
+    "mox_credit": {
+      "OVERSEAS":{"foreignFeeRate":0,"reward":"Asia Miles","label":"Mox 0 FX + Asia Miles 后备"}
+    },
+    "mmpower": {
+      "student":true,
+      "taobao":{"grossRate":0.08,"extraRate":0.076,"label":"MMPOWER 淘宝 8%"},
+      "online":{"grossRate":0.05,"extraRate":0.046,"label":"MMPOWER 网上零售 5%"},
+      "overseasPhysical":{"grossRate":0.04,"extraRate":0.036,"foreignFeeRate":0.0195,"label":"MMPOWER 海外实体 4%"},
+      "sharedMonthlyExtraRewardCapHKD":500
+    }
+  },
+  "notes": [
+    "v0.1 uses user-confirmed default payment-channel assumptions for Go and Pulse.",
+    "For HKD transactions, foreign-currency fees are zero even when the merchant is an airline or overseas travel service.",
+    "For non-HKD/CNY currencies, v0.1 does not invent an FX rate; reward HKD estimates are shown only when an HKD-equivalent amount can be determined safely.",
+    "Bank rules are configuration data and should be reviewed monthly before updating this file."
+  ]
+}
